@@ -7,18 +7,14 @@ library(sandwich)
 library(lmtest)        
 library(modelsummary)  
 library(knitr)
-library(here)
 
-# Rutas relativas a la raiz del proyecto: el script corre igual con Rscript,
-# con source() o linea por linea desde RStudio.
-fig <- function(x) here("figuras", x)
-tab <- function(x) here("tablas", x)
-walk(here(c("figuras", "tablas")), dir.create, showWarnings = FALSE)
+# Correr desde la carpeta del proyecto (donde esta hp.csv).
+walk(c("figuras", "tablas"), dir.create, showWarnings = FALSE)
 theme_set(theme_minimal(base_size = 11))
 
 dummies <- c("driveway", "recreation", "fullbase", "gasheat", "aircon", "prefer")
 
-hp <- read_csv(here("hp.csv"), show_col_types = FALSE) %>%
+hp <- read_csv("hp.csv", show_col_types = FALSE) %>%
   mutate(across(all_of(dummies), ~ as.integer(.x == "yes")),
          log_price = log(price), log_lotsize = log(lotsize))
 
@@ -51,7 +47,7 @@ writeLines(envolver(
   kable(desc, "latex", booktabs = TRUE, escape = FALSE, align = "lrrrrrr", linesep = "",
         digits = 3, format.args = list(big.mark = ",", scientific = FALSE)),
   "Estadística descriptiva de las variables (546 viviendas, Windsor, Canadá).", "descriptivas",
-  "$^{*}$ Variable dicotómica codificada 1 = sí, 0 = no."), tab("tabla1_descriptivas.tex"))
+  "$^{*}$ Variable dicotómica codificada 1 = sí, 0 = no."), "tablas/tabla1_descriptivas.tex")
 
 # ---- Pregunta 4: distribucion de price y log(price) -------------------------
 asimetria <- function(x) mean((x - mean(x))^3) / mean((x - mean(x))^2)^1.5
@@ -80,8 +76,8 @@ histograma <- function(x, etiqueta, archivo) {
                 subtitle = "La línea punteada marca la media", x = etiqueta, y = "Frecuencia"))
 }
 
-histograma(price,     "el precio de venta",      fig("fig1_hist_price.pdf"))
-histograma(log_price, "el logaritmo del precio", fig("fig2_hist_log_price.pdf"))
+histograma(price,     "el precio de venta",      "figuras/fig1_hist_price.pdf")
+histograma(log_price, "el logaritmo del precio", "figuras/fig2_hist_log_price.pdf")
 
 # ---- Pregunta 5: price contra lotsize ---------------------------------------
 # Los R2 solo son comparables entre modelos con la misma variable dependiente.
@@ -103,7 +99,7 @@ base_scatter <- ggplot(hp, aes(lotsize, price)) +
   scale_y_continuous(labels = scales::comma) +
   labs(x = "Tamaño del lote (pies cuadrados)", y = "Precio (dólares canadienses)")
 
-ggsave(fig("fig4_scatter_lm.pdf"), width = 6, height = 4,
+ggsave("figuras/fig4_scatter_lm.pdf", width = 6, height = 4,
        base_scatter + geom_smooth(method = "lm", formula = y ~ x, colour = "firebrick") +
          labs(title = "Precio y tamaño del lote", subtitle = "Con la recta de regresión lineal simple"))
 
@@ -113,19 +109,9 @@ bws <- c(1000, 2500, 5000)
 nw  <- function(h, x) approx(ksmooth(hp$lotsize, hp$price, "normal", bandwidth = h,
                                      x.points = hp$lotsize), xout = x, ties = mean)$y
 
-m_lin   <- lm(price ~ lotsize, data = hp)
-m_ll    <- lm(log_price ~ log_lotsize, data = hp)
-duan_ll <- mean(exp(resid(m_ll)))            # retransformacion de Duan a niveles
-f_ll    <- function(x) exp(predict(m_ll, tibble(log_lotsize = log(x)))) * duan_ll
-
-r2 <- function(f) 1 - sum((hp$price - f)^2) / sum((hp$price - mean(hp$price))^2)
-c(list(`MCO lineal` = fitted(m_lin), `Log-log retransformado` = f_ll(hp$lotsize)),
-  set_names(map(bws, nw, x = hp$lotsize), str_glue("Nadaraya-Watson h={bws}"))) %>%
-  imap(~ tibble(Ajuste = .y, R2 = r2(.x))) %>% bind_rows() %>% as.data.frame() %>% print(digits = 8)
-
 rejilla <- tibble(lotsize = seq(min(hp$lotsize), max(hp$lotsize), length.out = 300))
 
-ggsave(fig("fig7_bandwidths.pdf"), width = 6.5, height = 4.2,
+ggsave("figuras/fig7_bandwidths.pdf", width = 6.5, height = 4.2,
        base_scatter +
          geom_line(aes(colour = h), linewidth = .8, data = map(bws, ~ tibble(
            lotsize = rejilla$lotsize, h = str_glue("h = {format(.x, big.mark = ',')}"),
@@ -166,13 +152,13 @@ tabla_mco <- function(mods, etiq, encabezado, caption, label, archivo, nota = NU
                 stars = c("*" = .1, "**" = .05, "***" = .01)) %>%
     # raya donde la variable no entra; el resto, a notacion LaTeX
     mutate(across(-c(part, term, statistic), ~ if_else(.x == "",
-             if_else(statistic == "estimate", "---", ""),
-             .x %>% str_replace("^-", "$-$") %>% str_replace("(\\*+)$", "$^{\\1}$"))),
+                                                       if_else(statistic == "estimate", "---", ""),
+                                                       .x %>% str_replace("^-", "$-$") %>% str_replace("(\\*+)$", "$^{\\1}$"))),
            term = if_else(statistic == "std.error", "", term))
-
+  
   filas <- d %>% select(-part, -statistic) %>% pmap_chr(~ paste(c(...), collapse = " & ")) %>%
     paste0(if_else(d$statistic == "std.error" & d$part == "estimates", " \\\\[0.4em]", " \\\\"))
-
+  
   writeLines(envolver(c(
     "\\small", str_glue("\\begin{tabular}{l <strrep('c', length(mods))>}", .open = "<", .close = ">"),
     "\\toprule", encabezado, "\\midrule", filas[d$part == "estimates"],
@@ -181,14 +167,14 @@ tabla_mco <- function(mods, etiq, encabezado, caption, label, archivo, nota = NU
 }
 
 tabla_mco(modelos, etiquetas,
-  c("& \\multicolumn{5}{c}{\\textit{Variable dependiente}} \\\\", "\\cmidrule(lr){2-6}",
-    paste("&", paste(tt(c("price", "log(price)", "price", "log(price)", "log(price)")),
-                     collapse = " & "), "\\\\"),
-    paste("&", paste(sprintf("(%d)", 1:5), collapse = " & "), "\\\\")),
-  "Estimaciones de MCO", "tabla2", tab("tabla2.tex"),
-  paste("\\textit{Notas:} errores estándar robustos a heterocedasticidad (HC1) entre paréntesis.",
-        "Los asteriscos indican significancia al $^{*}10\\%$, $^{**}5\\%$ y $^{***}1\\%$.",
-        "Una raya indica que la variable no se incluye en esa especificación."))
+          c("& \\multicolumn{5}{c}{\\textit{Variable dependiente}} \\\\", "\\cmidrule(lr){2-6}",
+            paste("&", paste(tt(c("price", "log(price)", "price", "log(price)", "log(price)")),
+                             collapse = " & "), "\\\\"),
+            paste("&", paste(sprintf("(%d)", 1:5), collapse = " & "), "\\\\")),
+          "Estimaciones de MCO", "tabla2", "tablas/tabla2.tex",
+          paste("\\textit{Notas:} errores estándar robustos a heterocedasticidad (HC1) entre paréntesis.",
+                "Los asteriscos indican significancia al $^{*}10\\%$, $^{**}5\\%$ y $^{***}1\\%$.",
+                "Una raya indica que la variable no se incluye en esa especificación."))
 
 # ---- Pregunta 10: la elasticidad del lote en zona preferida -----------------
 m10   <- lm(log_price ~ log_lotsize + bedrooms + bathrooms + stories + driveway +
@@ -213,9 +199,9 @@ print(c(t = rob10["log_lotsize:prefer", 3], p = rob10["log_lotsize:prefer", 4],
         critico_5pct = qt(.975, gl10)))
 
 tabla_mco(list(m10), c(etiquetas[-1], `log_lotsize:prefer` = "log(lotsize)$\\times$prefer"),
-  paste("&", tt("log(price)"), "\\\\"),
-  "Especificación (5) con interacción entre el tamaño del lote y la zona preferida.",
-  "interaccion", tab("tabla4_interaccion.tex"))
+          paste("&", tt("log(price)"), "\\\\"),
+          "Especificación (5) con interacción entre el tamaño del lote y la zona preferida.",
+          "interaccion", "tablas/tabla4_interaccion.tex")
 
 # ---- Pregunta 11: prediccion con la especificacion (5) ----------------------
 m5 <- modelos[[5]]
@@ -261,7 +247,7 @@ tibble(Metodo = c("Bootstrap (Duan)", "Bootstrap (exp(x'b))", "Analitico (exp(x'
 print(c(boot_media = mean(boot$duan), boot_DE = sd(boot$duan)))
 print(c(ee_robusto = se_rob, ee_clasico = predict(m5, x0, se.fit = TRUE)$se.fit))
 
-ggsave(fig("fig8_bootstrap.pdf"), width = 6.5, height = 4,
+ggsave("figuras/fig8_bootstrap.pdf", width = 6.5, height = 4,
        ggplot(boot, aes(duan)) +
          geom_histogram(aes(y = after_stat(density)), bins = 40, fill = "grey70", colour = "white") +
          geom_density(colour = "steelblue", linewidth = .7) +
@@ -296,7 +282,7 @@ tibble(Punto = c("Mediana", "Media", "Máximo"),
          elasticidad = b12["log_lotsize"] + b12["lotsize"] * lotsize) %>%
   as.data.frame() %>% print(digits = 8)
 
-tabla_mco(list(m12), tt(etiquetas[c(2, 1, 3:9)]) %>% set_names(names(etiquetas)[c(2, 1, 3:9)]),
-  paste("&", tt("log(price)"), "\\\\"),
-  "Especificación (5) con \\texttt{lotsize} y $\\log(\\texttt{lotsize})$ simultáneamente.",
-  "lotsize_doble", tab("tabla5_lotsize_doble.tex"))
+tabla_mco(list(m12), etiquetas[c(2, 1, 3:9)],
+          paste("&", tt("log(price)"), "\\\\"),
+          "Especificación (5) con \\texttt{lotsize} y $\\log(\\texttt{lotsize})$ simultáneamente.",
+          "lotsize_doble", "tablas/tabla5_lotsize_doble.tex")
