@@ -209,14 +209,23 @@ x0 <- tibble(lotsize = 6000, bedrooms = 3, bathrooms = 2, stories = 2,
              driveway = 1, aircon = 1, garage = 1, prefer = 1) %>%
   mutate(log_lotsize = log(lotsize))
 
-xb     <- predict(m5, x0)
-sigma2 <- summary(m5)$sigma^2
-duan   <- mean(exp(resid(m5)))   # smearing: no supone normalidad
+# El EE robusto va a mano porque predict() usa la matriz clasica de varianzas.
+X0    <- model.matrix(delete.response(terms(m5)), x0)
+V5    <- vcovHC(m5, "HC1")
+xb    <- drop(X0 %*% coef(m5))            # prediccion de log(price)
+se_xb <- sqrt(drop(X0 %*% V5 %*% t(X0)))  # EE de x'b
+pred  <- exp(xb)                          # prediccion del precio
 
-tibble(Concepto = c("x'b (log)", "sigma^2", "factor de Duan", "exp(sigma^2/2)",
-                    "Ingenua exp(x'b)", "Normalidad", "Duan (reportada)"),
-       Valor = c(xb, sigma2, duan, exp(sigma2 / 2),
-                 exp(xb), exp(xb + sigma2 / 2), exp(xb) * duan)) %>%
+# Metodo delta: g(b) = exp(x'b) tiene gradiente exp(x'b) * x, de modo que
+# Var(g) = exp(x'b)^2 * x' V x y EE(precio) = exp(x'b) * EE(x'b).
+se_delta <- pred * se_xb
+z93      <- qnorm(.965)
+ic_delta <- pred + c(-1, 1) * z93 * se_delta
+ic_log   <- exp(xb + c(-1, 1) * z93 * se_xb)  # alternativa: exponenciar el IC en logs
+
+tibble(Concepto = c("x'b (log)", "EE robusto de x'b", "Precio predicho exp(x'b)",
+                    "EE delta del precio", "z al 93%"),
+       Valor = c(xb, se_xb, pred, se_delta, z93)) %>%
   mutate(Valor = formatC(Valor, format = "f", digits = 4, big.mark = ",")) %>%
   as.data.frame() %>% print()
 
@@ -224,38 +233,31 @@ tibble(Concepto = c("x'b (log)", "sigma^2", "factor de Duan", "exp(sigma^2/2)",
 # La semilla va aqui y no al inicio, para que el resultado no dependa de lo que
 # se haya corrido antes en el script.
 set.seed(14303)
-boot <- map(1:1000, function(i) {
+boot <- map_dbl(1:1000, function(i) {
   ajuste <- lm(formula(m5), data = slice_sample(hp, prop = 1, replace = TRUE))
-  p <- unname(exp(predict(ajuste, x0)))
-  c(duan = p * mean(exp(resid(ajuste))), ingenua = p)
-}) %>% bind_rows()
+  unname(exp(predict(ajuste, x0)))
+})
 
-ic_boot  <- quantile(boot$duan, c(.035, .965))
-ic_boot0 <- quantile(boot$ingenua, c(.035, .965))
+ic_boot <- quantile(boot, c(.035, .965))
 
-# IC analitico: el EE robusto va a mano porque predict() usa la matriz clasica
-X0     <- model.matrix(delete.response(terms(m5)), x0)
-V5     <- vcovHC(m5, "HC1")
-se_rob <- sqrt(drop(X0 %*% V5 %*% t(X0)))
-ic_log <- xb + c(-1, 1) * qt(.965, df.residual(m5)) * se_rob
-
-tibble(Metodo = c("Bootstrap (Duan)", "Bootstrap (exp(x'b))", "Analitico (exp(x'b))"),
-       li = c(ic_boot[1], ic_boot0[1], exp(ic_log[1])),
-       ls = c(ic_boot[2], ic_boot0[2], exp(ic_log[2]))) %>%
+tibble(Metodo = c("Bootstrap (percentiles)", "Delta (analitico)", "exp(IC en logs)"),
+       li = c(ic_boot[1], ic_delta[1], ic_log[1]),
+       ls = c(ic_boot[2], ic_delta[2], ic_log[2])) %>%
   mutate(ancho = ls - li, centro = (ls + li) / 2) %>% as.data.frame() %>% print(digits = 8)
 
-print(c(boot_media = mean(boot$duan), boot_DE = sd(boot$duan)))
-print(c(ee_robusto = se_rob, ee_clasico = predict(m5, x0, se.fit = TRUE)$se.fit))
+print(c(boot_media = mean(boot), boot_mediana = median(boot), boot_DE = sd(boot),
+        ee_delta = se_delta))
+print(c(ee_robusto_log = se_xb, ee_clasico_log = predict(m5, x0, se.fit = TRUE)$se.fit))
 
 ggsave("figuras/fig8_bootstrap.pdf", width = 6.5, height = 4,
-       ggplot(boot, aes(duan)) +
+       ggplot(tibble(precio = boot), aes(precio)) +
          geom_histogram(aes(y = after_stat(density)), bins = 40, fill = "grey70", colour = "white") +
          geom_density(colour = "steelblue", linewidth = .7) +
-         geom_vline(xintercept = exp(xb) * duan, colour = "firebrick", linewidth = .7) +
+         geom_vline(xintercept = pred, colour = "firebrick", linewidth = .7) +
          geom_vline(xintercept = ic_boot, linetype = "dashed", colour = "firebrick") +
          scale_x_continuous(labels = scales::comma) +
          labs(title = "Distribución bootstrap de la predicción (1,000 réplicas)",
-              subtitle = "Línea sólida: predicción de Duan; punteadas: percentiles 3.5 y 96.5",
+              subtitle = "Línea sólida: predicción exp(x'b); punteadas: percentiles 3.5 y 96.5",
               x = "Precio predicho (dólares canadienses)", y = "Densidad"))
 
 # ---- Pregunta 12: lotsize y log(lotsize) en la misma regresion --------------
